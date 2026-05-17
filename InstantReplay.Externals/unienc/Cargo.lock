@@ -1275,6 +1275,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "unienc_core"
+version = "1.4.1"
+
+[[package]]
 name = "unienc_ffmpeg"
 version = "1.4.1"
 dependencies = [
