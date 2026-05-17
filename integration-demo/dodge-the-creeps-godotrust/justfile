@@ -1,0 +1,29 @@
+godot := "godot4"
+profile := "debug"
+
+_release_flag := if profile == "release" { "--release" } else { "" }
+_unienc_manifest := justfile_directory() / "../../InstantReplay.Externals/unienc/Cargo.toml"
+_game_manifest   := justfile_directory() / "rust/Cargo.toml"
+
+# Build both GDExtensions (default)
+build: build-recorder build-game
+
+# Build the InstantReplay unienc_godot GDExtension
+build-recorder:
+    cargo build -p unienc_godot {{ _release_flag }} --manifest-path {{ _unienc_manifest }}
+
+# Build the dodge-the-creeps Rust GDExtension
+build-game:
+    cargo build {{ _release_flag }} --manifest-path {{ _game_manifest }}
+
+# Open the Godot project in the editor (builds first)
+open: build
+    {{ godot }} --path {{ justfile_directory() / "godot" }} --editor
+
+# Run the game without the editor (builds first)
+run: build
+    {{ godot }} --path {{ justfile_directory() / "godot" }}
+
+# Build both in release mode
+release:
+    just profile=release build
