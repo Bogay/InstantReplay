@@ -1,0 +1,15 @@
+; InstantReplay GDExtension — built from InstantReplay.Externals/unienc/
+; res:// is rooted at this project's godot/ directory; ../../../ reaches
+; the InstantReplay workspace root.
+
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.1
+
+[libraries]
+linux.debug.x86_64   = "res://../../../InstantReplay.Externals/unienc/target/debug/libunienc_godot.so"
+linux.release.x86_64 = "res://../../../InstantReplay.Externals/unienc/target/release/libunienc_godot.so"
+windows.debug.x86_64   = "res://../../../InstantReplay.Externals/unienc/target/debug/unienc_godot.dll"
+windows.release.x86_64 = "res://../../../InstantReplay.Externals/unienc/target/release/unienc_godot.dll"
+macos.debug   = "res://../../../InstantReplay.Externals/unienc/target/debug/libunienc_godot.dylib"
+macos.release = "res://../../../InstantReplay.Externals/unienc/target/release/libunienc_godot.dylib"
