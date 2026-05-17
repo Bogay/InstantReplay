@@ -11,3 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 godot = "0.5"
 unienc_core = { path = "../unienc_core" }
+unienc = { path = "../unienc" }
+bincode = { workspace = true }
+tokio = { version = "1", features = ["full"] }
