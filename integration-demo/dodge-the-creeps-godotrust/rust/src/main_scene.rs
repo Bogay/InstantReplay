@@ -101,9 +101,10 @@ impl Main {
         self.music.stop();
         self.death_sound.play();
 
-        // Export the last REPLAY_SECONDS of footage from the buffer.
+        // Defer so the mutable borrow on Main is released before the recorder
+        // emits error_occurred / export_completed back into this node.
         self.recorder
-            .call("export_replay", &[REPLAY_SECONDS.to_variant()]);
+            .call_deferred("export_replay", &[REPLAY_SECONDS.to_variant()]);
     }
 
     // No #[func].
@@ -121,8 +122,9 @@ impl Main {
 
         self.music.play();
 
-        // Begin buffering frames for this round.
-        self.recorder.call("start", &[]);
+        // Defer for the same reason: start() may emit error_occurred synchronously,
+        // which would try to re-borrow Main while new_game() still holds &mut self.
+        self.recorder.call_deferred("start", &[]);
     }
 
     /// Emitted by InstantReplayRecorder when export finishes.

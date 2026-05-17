@@ -129,8 +129,13 @@ impl EncodingPipeline {
         let video_encoder = encoding_system.new_video_encoder()?;
         let audio_encoder = encoding_system.new_audio_encoder()?;
 
-        let (video_in, video_out) = video_encoder.get()?;
-        let (audio_in, audio_out) = audio_encoder.get()?;
+        // get() spawns the ffmpeg subprocess via tokio::process::Command, which
+        // requires a reactor to be active. Enter the runtime before calling it.
+        let ((video_in, video_out), (audio_in, audio_out)) = tokio_rt.block_on(async {
+            let vp = video_encoder.get()?;
+            let ap = audio_encoder.get()?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((vp, ap))
+        })?;
 
         let buffer = Arc::new(BoundedEncodedFrameBuffer::new(max_memory_bytes));
 
