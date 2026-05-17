@@ -126,12 +126,12 @@ impl EncodingPipeline {
         let runtime = TokioRuntime { handle: tokio_rt.handle().clone() };
         let encoding_system = GodotSystem::new(&video_opts, &audio_opts, runtime);
 
-        let video_encoder = encoding_system.new_video_encoder()?;
-        let audio_encoder = encoding_system.new_audio_encoder()?;
-
-        // get() spawns the ffmpeg subprocess via tokio::process::Command, which
-        // requires a reactor to be active. Enter the runtime before calling it.
+        // new_video_encoder() prints "Running FFmpeg" and spawns the ffmpeg
+        // subprocess via tokio::process::Command. That call needs a reactor on
+        // the current thread — enter the runtime with block_on first.
         let ((video_in, video_out), (audio_in, audio_out)) = tokio_rt.block_on(async {
+            let video_encoder = encoding_system.new_video_encoder()?;
+            let audio_encoder = encoding_system.new_audio_encoder()?;
             let vp = video_encoder.get()?;
             let ap = audio_encoder.get()?;
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>((vp, ap))
