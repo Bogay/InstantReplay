@@ -1,6 +1,6 @@
 use godot::prelude::*;
 
-mod pipeline;
+pub mod pipeline;
 mod recorder;
 
 struct InstantReplayExtension;

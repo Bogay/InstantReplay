@@ -200,9 +200,13 @@ impl EncodingPipeline {
         output_path: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (video_frames, audio_frames) = self.buffer.get_frames_for_duration(duration_secs);
-        let muxer = self.encoding_system.new_muxer(Path::new(output_path))?;
 
+        // new_muxer() spawns the ffmpeg muxer process and wraps its stdio as
+        // tokio async pipes — both require a reactor. Enter the runtime first.
+        let encoding_system = &self.encoding_system;
+        let output_path = output_path.to_owned();
         self.tokio_rt.block_on(async move {
+            let muxer = encoding_system.new_muxer(Path::new(&output_path))?;
             let (mut vmux, mut amux, completion): (
                 GodotVideoMuxIn,
                 GodotAudioMuxIn,

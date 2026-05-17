@@ -24,6 +24,10 @@ open: build
 run: build
     {{ godot }} --path {{ justfile_directory() / "godot" }}
 
+# Run recorder pipeline e2e tests (no Godot required, needs ffmpeg)
+test:
+    cargo test -p unienc_godot --manifest-path {{ _unienc_manifest }} -- --nocapture
+
 # Build both in release mode
 release:
     just profile=release build
