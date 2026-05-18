@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use godot::classes::{AudioEffectCapture, AudioServer, INode, RenderingServer, Time};
+use godot::classes::{AudioEffectCapture, AudioServer, INode, ProjectSettings, RenderingServer, Time};
 use godot::prelude::*;
 use unienc_core::{session::SessionController, temporal::TemporalController};
 
@@ -267,11 +267,16 @@ impl InstantReplayRecorder {
         let _ = session.controller.begin_export();
 
         let duration = if seconds > 0.0 { Some(seconds) } else { None };
-        let path = if self.output_path.is_empty() {
-            "replay.mp4".to_string()
+        let raw_path = if self.output_path.is_empty() {
+            GString::from("user://replay.mp4")
         } else {
-            self.output_path.to_string()
+            self.output_path.clone()
         };
+        // Resolve Godot virtual paths (user://, res://) to real filesystem paths.
+        // FFmpeg receives a plain OS path; it doesn't understand Godot's VFS.
+        let path = ProjectSettings::singleton()
+            .globalize_path(&raw_path)
+            .to_string();
 
         // Notify listeners immediately so they can show a "Saving…" indicator.
         self.base_mut()
