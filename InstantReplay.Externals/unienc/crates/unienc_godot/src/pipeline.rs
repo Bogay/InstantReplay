@@ -213,23 +213,35 @@ impl EncodingPipeline {
                 GodotMuxCompletion,
             ) = muxer.get_inputs()?;
 
-            // Video
-            for frame in &video_frames {
-                let (mut data, _): (GodotVideoData, _) =
-                    bincode::decode_from_slice(&frame.data, standard())?;
-                data.set_timestamp(frame.timestamp);
-                vmux.push(data).await?;
-            }
-            vmux.finish().await?;
+            // Push video and audio concurrently so neither pipe can deadlock
+            // the other. The MP4 muxer needs data from both inputs to produce
+            // interleaved output; writing them sequentially would deadlock once
+            // the video pipe buffer fills while the mux waits for audio.
+            let video_fut = async {
+                for frame in &video_frames {
+                    let (mut data, _): (GodotVideoData, _) =
+                        bincode::decode_from_slice(&frame.data, standard())?;
+                    data.set_timestamp(frame.timestamp);
+                    vmux.push(data).await?;
+                }
+                vmux.finish().await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            };
 
-            // Audio
-            for frame in &audio_frames {
-                let (mut data, _): (GodotAudioData, _) =
-                    bincode::decode_from_slice(&frame.data, standard())?;
-                data.set_timestamp(frame.timestamp);
-                amux.push(data).await?;
-            }
-            amux.finish().await?;
+            let audio_fut = async {
+                for frame in &audio_frames {
+                    let (mut data, _): (GodotAudioData, _) =
+                        bincode::decode_from_slice(&frame.data, standard())?;
+                    data.set_timestamp(frame.timestamp);
+                    amux.push(data).await?;
+                }
+                amux.finish().await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            };
+
+            let (vr, ar) = tokio::join!(video_fut, audio_fut);
+            vr?;
+            ar?;
 
             completion.finish().await?;
 

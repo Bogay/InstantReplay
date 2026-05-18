@@ -115,6 +115,7 @@ impl Main {
             .call_deferred("export_replay", &[REPLAY_SECONDS.to_variant()]);
     }
 
+    #[func]
     pub fn new_game(&mut self) {
         let start_position = self.base().get_node_as::<Marker2D>("StartPosition");
 
