@@ -23,7 +23,19 @@ SCRIPT_DIR=$(dirname "$(realpath "$0")")
 PROJECT_DIR="$SCRIPT_DIR/godot"
 # The test script writes next to project.godot for easy inspection
 OUTPUT_FILE="$PROJECT_DIR/test_replay.mp4"
-GODOT="${GODOT:-godot}"
+# Resolve godot binary: honour GODOT env var, then try common names/flatpak
+if [[ -n "${GODOT:-}" ]]; then
+    : # already set by caller
+elif command -v godot &>/dev/null 2>&1; then
+    GODOT="godot"
+elif command -v godot4 &>/dev/null 2>&1; then
+    GODOT="godot4"
+elif flatpak info org.godotengine.Godot &>/dev/null 2>&1; then
+    GODOT="flatpak run org.godotengine.Godot"
+else
+    echo "ERROR: cannot find godot binary. Set GODOT= env var or install Godot." >&2
+    exit 1
+fi
 TIMEOUT_SECS=30
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
