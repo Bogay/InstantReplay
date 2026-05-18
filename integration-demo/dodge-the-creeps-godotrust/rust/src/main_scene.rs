@@ -99,6 +99,13 @@ impl Main {
         self.music.stop();
         self.death_sound.play();
 
+        // Guard against re-entry: double mob-hit in the same frame, or player
+        // dying in a new game before the previous export has finished.
+        if self.exporting {
+            return;
+        }
+        self.exporting = true;
+
         // Intercept window-close until the export finishes.
         self.base_mut().get_tree().set_auto_accept_quit(false);
 
@@ -130,7 +137,6 @@ impl Main {
     #[func]
     fn on_replay_export_started(&mut self, path: GString) {
         godot_print!("[InstantReplay] Saving to: {path}");
-        self.exporting = true;
         self.hud.bind_mut().show_replay_status("Saving replay…".into());
     }
 

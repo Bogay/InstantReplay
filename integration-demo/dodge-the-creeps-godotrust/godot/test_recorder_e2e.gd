@@ -14,6 +14,7 @@ var _recorder: Node
 var _frame_count := 0
 var _frame_count_at_export := -1
 var _export_started := false
+var _error_fired := false
 
 func _initialize() -> void:
 	if not ClassDB.class_exists("InstantReplayRecorder"):
@@ -56,6 +57,10 @@ func _initialize() -> void:
 	print("[test] Calling export_replay()...")
 	_recorder.call("export_replay", RECORD_SECS)
 
+	# Assert 4: a second call (simulating double mob-hit) must NOT emit error_occurred
+	# and must not interrupt the running export.
+	_recorder.call("export_replay", RECORD_SECS)
+
 	var elapsed_ms := Time.get_ticks_msec() - t0
 	print("[test] export_replay() returned in %dms" % elapsed_ms)
 
@@ -92,6 +97,12 @@ func _on_export_completed(path: String) -> void:
 	var size := f.get_length()
 	f.close()
 
+	# Assert 4: the second export_replay() call must not have emitted error_occurred
+	if _error_fired:
+		printerr("[test] FAIL: error_occurred fired — double export_replay() call must be silently ignored")
+		quit(1)
+		return
+
 	if size > 0:
 		print("[test] PASS: %s (%d bytes), %d frames during export" % [path, size, frames_during_export])
 		quit(0)
@@ -100,5 +111,5 @@ func _on_export_completed(path: String) -> void:
 		quit(1)
 
 func _on_error(message: String) -> void:
-	printerr("[test] FAIL: error_occurred: %s" % message)
-	quit(1)
+	printerr("[test] error_occurred: %s" % message)
+	_error_fired = true

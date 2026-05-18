@@ -248,7 +248,9 @@ impl InstantReplayRecorder {
     #[func]
     fn export_replay(&mut self, seconds: f64) {
         if self.pending_export.is_some() {
-            self.emit_error("Export already in progress");
+            // Silently ignore — a race condition (e.g. two mob hits, or dying during
+            // a save) must not interrupt the export already in progress.
+            godot_print!("[InstantReplay] export_replay() called while export in progress — ignored");
             return;
         }
 
