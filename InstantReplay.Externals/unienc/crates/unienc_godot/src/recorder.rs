@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use godot::classes::{AudioEffectCapture, AudioServer, INode, RenderingServer, Time};
 use godot::prelude::*;
 use unienc_core::{session::SessionController, temporal::TemporalController};
@@ -74,6 +76,8 @@ pub struct InstantReplayRecorder {
     audio_capture_effect_idx: i32,
     /// Cached viewport RID used by the frame_post_draw callback.
     cached_viewport_rid: Rid,
+    /// Result slot written by the background export thread; polled in _process.
+    pending_export: Option<Arc<Mutex<Option<Result<String, String>>>>>,
 }
 
 #[godot_api]
@@ -94,6 +98,7 @@ impl INode for InstantReplayRecorder {
             audio_capture: None,
             audio_capture_effect_idx: -1,
             cached_viewport_rid: Rid::Invalid,
+            pending_export: None,
         }
     }
 
@@ -104,7 +109,8 @@ impl INode for InstantReplayRecorder {
 
     fn process(&mut self, _delta: f64) {
         // Video capture happens in _on_frame_post_draw (connected in ready()).
-        // _process() handles audio only.
+        // _process() handles audio and polls the background export thread.
+        self.poll_pending_export();
         self.capture_audio();
     }
 
@@ -116,6 +122,11 @@ impl INode for InstantReplayRecorder {
 
 #[godot_api]
 impl InstantReplayRecorder {
+    /// Emitted synchronously inside export_replay(), before the background
+    /// thread starts. Use this to show a "Saving…" indicator immediately.
+    #[signal]
+    fn export_started(path: GString);
+
     /// Emitted when export_replay() finishes successfully.
     #[signal]
     fn export_completed(path: GString);
@@ -232,9 +243,15 @@ impl InstantReplayRecorder {
 
     /// Stop recording and export the last `seconds` of footage.
     /// Pass `seconds <= 0` to export everything in the buffer.
-    /// Emits `export_completed` on success, `error_occurred` on failure.
+    /// Returns immediately; emits `export_completed` or `error_occurred` from
+    /// the main thread once the background export thread finishes.
     #[func]
     fn export_replay(&mut self, seconds: f64) {
+        if self.pending_export.is_some() {
+            self.emit_error("Export already in progress");
+            return;
+        }
+
         let Some(mut session) = self.session.take() else {
             self.emit_error("No active recording session");
             return;
@@ -247,9 +264,6 @@ impl InstantReplayRecorder {
         session.temporal.pause();
         let _ = session.controller.begin_export();
 
-        // Drain the encoding pipeline (blocks until all buffered frames are encoded)
-        session.pipeline.stop();
-
         let duration = if seconds > 0.0 { Some(seconds) } else { None };
         let path = if self.output_path.is_empty() {
             "replay.mp4".to_string()
@@ -257,22 +271,46 @@ impl InstantReplayRecorder {
             self.output_path.to_string()
         };
 
-        match session.pipeline.export_to_file(duration, &path) {
-            Ok(()) => {
-                let _ = session.controller.complete();
-                self.base_mut()
-                    .emit_signal("export_completed", &[GString::from(&path).to_variant()]);
-            }
-            Err(e) => {
-                session.controller.fail();
-                self.emit_error(&format!("Export failed: {e}"));
-            }
-        }
+        // Notify listeners immediately so they can show a "Saving…" indicator.
+        self.base_mut()
+            .emit_signal("export_started", &[GString::from(&path).to_variant()]);
+
+        // Slot shared between this thread (reader) and the export thread (writer).
+        let slot: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+        let slot_writer = Arc::clone(&slot);
+        self.pending_export = Some(slot);
+
+        std::thread::spawn(move || {
+            // stop() drains encoders; export_to_file() muxes — both are blocking.
+            session.pipeline.stop();
+            let result = session
+                .pipeline
+                .export_to_file(duration, &path)
+                .map(|_| path)
+                .map_err(|e| e.to_string());
+            *slot_writer.lock().unwrap() = Some(result);
+        });
     }
 
     fn emit_error(&mut self, msg: &str) {
         self.base_mut()
             .emit_signal("error_occurred", &[GString::from(msg).to_variant()]);
+    }
+
+    fn poll_pending_export(&mut self) {
+        let result = self.pending_export.as_ref().and_then(|slot| {
+            slot.lock().unwrap().take()
+        });
+        if let Some(r) = result {
+            self.pending_export = None;
+            match r {
+                Ok(path) => {
+                    self.base_mut()
+                        .emit_signal("export_completed", &[GString::from(&path).to_variant()]);
+                }
+                Err(e) => self.emit_error(&format!("Export failed: {e}")),
+            }
+        }
     }
 }
 

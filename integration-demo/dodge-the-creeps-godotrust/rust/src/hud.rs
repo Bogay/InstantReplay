@@ -55,6 +55,19 @@ impl Hud {
         self.signals().start_game().emit();
     }
 
+    /// Show a persistent status line at the bottom of the screen.
+    /// Unlike show_message, this does not auto-hide.
+    pub fn show_replay_status(&self, text: GString) {
+        let mut label = self.base().get_node_as::<Label>("ReplayStatusLabel");
+        label.set_text(&text);
+        label.show();
+    }
+
+    pub fn clear_replay_status(&self) {
+        let mut label = self.base().get_node_as::<Label>("ReplayStatusLabel");
+        label.hide();
+    }
+
     #[func]
     fn on_message_timer_timeout(&self) {
         let mut message_label = self.base().get_node_as::<Label>("MessageLabel");

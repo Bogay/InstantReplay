@@ -1,6 +1,7 @@
 use crate::{hud, mob, player};
 
 use godot::classes::{AudioStreamPlayer, Marker2D, PathFollow2D, RigidBody2D, Timer};
+use godot::classes::notify::NodeNotification;
 use godot::prelude::*;
 
 use std::f32::consts::PI;
@@ -21,16 +22,14 @@ pub struct Main {
     // separate cdylib), so we hold it as Node and call methods dynamically.
     recorder: OnReady<Gd<Node>>,
     score: i64,
+    exporting: bool,
     base: Base<Node>,
 }
 
 #[godot_api]
 impl INode for Main {
     fn init(base: Base<Node>) -> Self {
-        // We could also initialize those manually inside ready(), but OnReady automatically defers initialization.
-        // Alternatively to init(), you can use #[init(...)] on the struct fields.
         Self {
-            // OnReady::from_loaded(path) == OnReady::new(|| tools::load(path)).
             mob_scene: OnReady::from_loaded("res://Mob.tscn"),
             player: OnReady::from_node("Player"),
             hud: OnReady::from_node("Hud"),
@@ -38,60 +37,59 @@ impl INode for Main {
             death_sound: OnReady::from_node("DeathSound"),
             recorder: OnReady::from_node("InstantReplayRecorder"),
             score: 0,
+            exporting: false,
             base,
         }
     }
 
     fn ready(&mut self) {
-        // The OnReady instances are now initialized, we can access them like normal fields.
-
-        // Get a Gd<Main> pointer to this instance.
         let main = self.to_gd();
 
-        // Connect Player::hit -> Main::game_over.
         self.player
             .signals()
             .hit()
             .connect_other(&main, Self::game_over);
 
-        // Connect Hud::start_game -> Main::new_game.
         self.hud
             .signals()
             .start_game()
             .connect_other(&main, Self::new_game);
 
-        // Connect Main.ScoreTimer::timeout -> Main::on_score_timer_timeout.
         self.score_timer()
             .signals()
             .timeout()
             .connect_other(&main, Self::on_score_timer_timeout);
 
-        // Connect Main.MobTimer::timeout -> Main::on_mob_timer_timeout.
         self.mob_timer()
             .signals()
             .timeout()
             .connect_other(&main, Self::on_mob_timer_timeout);
 
-        // Main.StartTimer::timeout -> Main::on_start_timer_timeout is set up in the Editor's Inspector UI, but could be done here as well,
-        // as follows. Note that signal handlers connected via Rust do not need a #[func] annotation, they can remain entirely visible to Godot.
-        //
-        // self.start_timer()
-        //     .signals()
-        //     .timeout()
-        //     .connect_other(&main, Self::on_start_timer_timeout);
-
         // Wire InstantReplayRecorder signals. The recorder is from a foreign
         // GDExtension, so we use string-based connect() rather than typed signals.
+        let on_started  = self.base().callable("on_replay_export_started");
         let on_exported = self.base().callable("on_replay_exported");
-        let on_error = self.base().callable("on_replay_error");
+        let on_error    = self.base().callable("on_replay_error");
+        self.recorder.connect("export_started",   &on_started);
         self.recorder.connect("export_completed", &on_exported);
-        self.recorder.connect("error_occurred", &on_error);
+        self.recorder.connect("error_occurred",   &on_error);
+    }
+
+    fn on_notification(&mut self, what: NodeNotification) {
+        // While an export is running, defer window close so the background
+        // thread can finish writing the file.
+        if what == NodeNotification::WM_CLOSE_REQUEST {
+            if self.exporting {
+                godot_print!("[InstantReplay] Export in progress — close deferred");
+            } else {
+                self.base_mut().get_tree().quit();
+            }
+        }
     }
 }
 
 #[godot_api]
 impl Main {
-    // No #[func] here, this method is directly called from Rust (via type-safe signals).
     fn game_over(&mut self) {
         self.score_timer().stop();
         self.mob_timer().stop();
@@ -101,13 +99,15 @@ impl Main {
         self.music.stop();
         self.death_sound.play();
 
+        // Intercept window-close until the export finishes.
+        self.base_mut().get_tree().set_auto_accept_quit(false);
+
         // Defer so the mutable borrow on Main is released before the recorder
-        // emits error_occurred / export_completed back into this node.
+        // emits export_started back into this node.
         self.recorder
             .call_deferred("export_replay", &[REPLAY_SECONDS.to_variant()]);
     }
 
-    // No #[func].
     pub fn new_game(&mut self) {
         let start_position = self.base().get_node_as::<Marker2D>("StartPosition");
 
@@ -122,37 +122,48 @@ impl Main {
 
         self.music.play();
 
-        // Defer for the same reason: start() may emit error_occurred synchronously,
-        // which would try to re-borrow Main while new_game() still holds &mut self.
         self.recorder.call_deferred("start", &[]);
+    }
+
+    /// export_started fires synchronously inside export_replay(), before the
+    /// background thread starts — safe to update the HUD here.
+    #[func]
+    fn on_replay_export_started(&mut self, path: GString) {
+        godot_print!("[InstantReplay] Saving to: {path}");
+        self.exporting = true;
+        self.hud.bind_mut().show_replay_status("Saving replay…".into());
     }
 
     /// Emitted by InstantReplayRecorder when export finishes.
     #[func]
-    fn on_replay_exported(&self, path: GString) {
+    fn on_replay_exported(&mut self, path: GString) {
         godot_print!("[InstantReplay] Saved: {path}");
+        self.exporting = false;
+        self.hud.bind_mut().clear_replay_status();
+        self.hud.bind_mut().show_message("Replay saved!".into());
+        self.base_mut().get_tree().set_auto_accept_quit(true);
     }
 
     /// Emitted by InstantReplayRecorder on any error.
     #[func]
-    fn on_replay_error(&self, message: GString) {
+    fn on_replay_error(&mut self, message: GString) {
         godot_error!("[InstantReplay] {message}");
+        self.exporting = false;
+        self.hud.bind_mut().clear_replay_status();
+        self.base_mut().get_tree().set_auto_accept_quit(true);
     }
 
-    #[func] // needed because connected in Editor UI (see ready).
+    #[func]
     fn on_start_timer_timeout(&mut self) {
         self.mob_timer().start();
         self.score_timer().start();
     }
 
-    // No #[func], connected in pure Rust.
     fn on_score_timer_timeout(&mut self) {
         self.score += 1;
-
         self.hud.bind_mut().update_score(self.score);
     }
 
-    // No #[func], connected in pure Rust.
     fn on_mob_timer_timeout(&mut self) {
         let mut mob_spawn_location = self
             .base()
@@ -174,7 +185,6 @@ impl Main {
 
         let mut mob = mob_scene.cast::<mob::Mob>();
         let range = {
-            // Local scope to bind `mob` user object
             let mob = mob.bind();
             rand::random_range(mob.min_speed..mob.max_speed)
         };
@@ -182,7 +192,6 @@ impl Main {
         mob.set_linear_velocity(Vector2::new(range, 0.0).rotated(real::from_f32(direction)));
     }
 
-    // These timers could also be stored as OnReady fields, but are now fetched via function for demonstration purposes.
     fn start_timer(&self) -> Gd<Timer> {
         self.base().get_node_as::<Timer>("StartTimer")
     }
