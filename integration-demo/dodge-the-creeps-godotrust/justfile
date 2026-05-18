@@ -28,6 +28,11 @@ run: build
 test:
     cargo test -p unienc_godot --manifest-path {{ _unienc_manifest }} -- --nocapture
 
+# Run Godot e2e recording test; output written to godot/test_replay.mp4
+# Needs a display (real or Xvfb). Pass --build to rebuild the extension first.
+test-godot *ARGS:
+    bash {{ justfile_directory() / "test_godot_e2e.sh" }} {{ ARGS }}
+
 # Build both in release mode
 release:
     just profile=release build

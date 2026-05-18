@@ -57,15 +57,21 @@ fn pipeline_encodes_and_exports_full_duration() {
 
 #[test]
 fn pipeline_trims_to_requested_duration() {
-    let mut pipeline =
-        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024).expect("init");
-    send_frames(&pipeline);
-    pipeline.stop();
-
+    // export_to_file drains the buffer, so use separate pipelines for each export
     let out_full = "/tmp/unienc_e2e_trim_full.mp4";
     let out_trimmed = "/tmp/unienc_e2e_trim_1s.mp4";
-    pipeline.export_to_file(None, out_full).expect("full export");
-    pipeline.export_to_file(Some(1.0), out_trimmed).expect("trimmed export");
+
+    let mut full_pipeline =
+        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024).expect("init full");
+    send_frames(&full_pipeline);
+    full_pipeline.stop();
+    full_pipeline.export_to_file(None, out_full).expect("full export");
+
+    let mut trimmed_pipeline =
+        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024).expect("init trimmed");
+    send_frames(&trimmed_pipeline);
+    trimmed_pipeline.stop();
+    trimmed_pipeline.export_to_file(Some(1.0), out_trimmed).expect("trimmed export");
 
     let full_size = std::fs::metadata(out_full).expect("full file missing").len();
     let trimmed_size = std::fs::metadata(out_trimmed).expect("trimmed file missing").len();

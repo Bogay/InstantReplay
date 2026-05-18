@@ -2,8 +2,8 @@
 
 [ext_resource type="PackedScene" uid="uid://4vwrqjegqwpj" path="res://Player.tscn" id="3"]
 [ext_resource type="PackedScene" uid="uid://ccqoreueuxdb7" path="res://Hud.tscn" id="4"]
-[ext_resource type="AudioStream" uid="uid://cx4vhjxdlqh24" path="res://art/House In a Forest Loop.ogg" id="5"]
-[ext_resource type="AudioStream" uid="uid://dmrwe4a6qhage" path="res://art/gameover.wav" id="6"]
+[ext_resource type="AudioStream" uid="uid://dbfrh6bi48gd7" path="res://art/House In a Forest Loop.ogg" id="5"]
+[ext_resource type="AudioStream" uid="uid://vau2dqlxndoh" path="res://art/gameover.wav" id="6"]
 
 [sub_resource type="Curve2D" id="1"]
 _data = {
@@ -12,6 +12,16 @@ _data = {
 point_count = 5
 
 [node name="Main" type="Main"]
+_import_path = NodePath("")
+unique_name_in_owner = false
+process_mode = 0
+process_priority = 0
+process_physics_priority = 0
+process_thread_group = 0
+physics_interpolation_mode = 0
+auto_translate_mode = 0
+editor_description = ""
+script = null
 
 [node name="ColorRect" type="ColorRect" parent="."]
 anchors_preset = 15
@@ -22,6 +32,16 @@ grow_vertical = 2
 color = Color(0.219608, 0.372549, 0.380392, 1)
 
 [node name="Player" parent="." instance=ExtResource("3")]
+_import_path = NodePath("")
+unique_name_in_owner = false
+process_mode = 0
+process_priority = 0
+process_physics_priority = 0
+process_thread_group = 0
+physics_interpolation_mode = 0
+auto_translate_mode = 0
+editor_description = ""
+script = null
 
 [node name="MobTimer" type="Timer" parent="."]
 wait_time = 0.5
@@ -41,6 +61,16 @@ curve = SubResource("1")
 [node name="MobSpawnLocation" type="PathFollow2D" parent="MobPath"]
 
 [node name="Hud" parent="." instance=ExtResource("4")]
+_import_path = NodePath("")
+unique_name_in_owner = false
+process_mode = 0
+process_priority = 0
+process_physics_priority = 0
+process_thread_group = 0
+physics_interpolation_mode = 0
+auto_translate_mode = 0
+editor_description = ""
+script = null
 
 [node name="Music" type="AudioStreamPlayer" parent="."]
 stream = ExtResource("5")
@@ -49,6 +79,15 @@ stream = ExtResource("5")
 stream = ExtResource("6")
 
 [node name="InstantReplayRecorder" type="InstantReplayRecorder" parent="."]
+_import_path = NodePath("")
+unique_name_in_owner = false
+process_mode = 0
+process_priority = 0
+process_physics_priority = 0
+process_thread_group = 0
+physics_interpolation_mode = 0
+auto_translate_mode = 0
+editor_description = ""
 output_path = "user://replay.mp4"
 max_duration = 30.0
 fps_hint = 30
@@ -58,5 +97,6 @@ max_memory_usage = 268435456
 video_width = 0
 video_height = 0
 use_gpu_readback = false
+script = null
 
 [connection signal="timeout" from="StartTimer" to="." method="on_start_timer_timeout"]
