@@ -99,12 +99,98 @@ func _on_export_completed(path: String) -> void:
 	f.close()
 
 	# Assert 3: output file must contain actual encoded data.
-	if size > 0:
-		print("[test] PASS: %s (%d bytes), %d frames during export" % [path, size, frames_during_export])
-		quit(0)
-	else:
+	if size == 0:
 		printerr("[test] FAIL: output file is empty: %s" % path)
 		quit(1)
+		return
+
+	# Assert 5+6: video frame content — no 4× tiling, has actual color.
+	if not _check_video_content(path):
+		quit(1)
+		return
+
+	print("[test] PASS: %s (%d bytes), %d frames during export" % [path, size, frames_during_export])
+	quit(0)
+
+## Verify video content against two assertions:
+##   Assert 5: Frame count must be proportional to recording duration.
+##             The FORMAT_RGB8 viewport bug (3 bytes/pixel instead of 4) causes FFmpeg to
+##             accumulate 4 raw frames per 3 encoded frames → only 75% of expected frames.
+##             The FORMAT_L8 bug (1 byte/pixel) causes only 25%. Either way, frame count
+##             drops well below 70% of the expected rate and we can catch it here.
+##   Assert 6: At least some pixels have non-zero color saturation (not greyscale).
+##             The mobile-renderer FORMAT_L8 data mis-read as BGRA channels produces
+##             grey output; this check catches that even if frame count is somehow right.
+func _check_video_content(mp4_path: String) -> bool:
+	# Assert 5: frame count must be ≥ 70% of duration × 30 fps.
+	var dur_out: Array = []
+	OS.execute("ffprobe", PackedStringArray([
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		mp4_path
+	]), dur_out)
+	var duration_secs := float(dur_out[0].strip_edges()) if not dur_out.is_empty() else 0.0
+
+	var frames_out: Array = []
+	OS.execute("ffprobe", PackedStringArray([
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=nb_frames",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		mp4_path
+	]), frames_out)
+	var frame_count := int(frames_out[0].strip_edges()) if not frames_out.is_empty() else 0
+
+	var expected_min := int(duration_secs * 30.0 * 0.7)
+	if frame_count < expected_min:
+		printerr(
+			"[test] FAIL: video has too few frames — got %d, need ≥%d (%.1fs × 30fps × 70%%). " \
+			% [frame_count, expected_min, duration_secs] +
+			"Possible bytes-per-pixel mismatch (FORMAT_RGB8/L8 from viewport)."
+		)
+		return false
+
+	# Assert 6: has actual color (not monochrome/greyscale).
+	# Extract one frame and sample a pixel grid for maximum per-pixel saturation.
+	var frame_path := "/tmp/ir_test_verify_frame.png"
+	var extract_exit := OS.execute("ffmpeg", PackedStringArray([
+		"-y", "-loglevel", "error",
+		"-i", mp4_path,
+		"-ss", "2", "-vframes", "1",
+		frame_path
+	]))
+	if extract_exit != 0:
+		printerr("[test] FAIL: ffmpeg could not extract a frame for color verification (exit %d)" % extract_exit)
+		return false
+
+	var img := Image.load_from_file(frame_path)
+	DirAccess.remove_absolute(frame_path)
+	if img == null:
+		printerr("[test] FAIL: could not load extracted verification frame: %s" % frame_path)
+		return false
+
+	var w := img.get_width()
+	var h := img.get_height()
+	var max_sat := 0.0
+	for xi in range(0, w, max(1, w / 16)):
+		for yi in range(0, h, max(1, h / 24)):
+			var p := img.get_pixel(xi, yi)
+			var lo := minf(p.r, minf(p.g, p.b))
+			var hi := maxf(p.r, maxf(p.g, p.b))
+			if hi - lo > max_sat:
+				max_sat = hi - lo
+	if max_sat < 0.08:
+		printerr(
+			"[test] FAIL: video appears monochrome (max saturation=%.3f, need ≥0.08). " \
+			% max_sat +
+			"Possible FORMAT_L8 channel mis-read producing grey output."
+		)
+		return false
+
+	print("[test] Video content OK: %d frames in %.1fs, max saturation=%.3f" \
+			% [frame_count, duration_secs, max_sat])
+	return true
 
 func _on_error(message: String) -> void:
 	printerr("[test] error_occurred: %s" % message)

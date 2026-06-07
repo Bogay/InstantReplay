@@ -340,11 +340,28 @@ impl InstantReplayRecorder {
 impl InstantReplayRecorder {
     /// CPU path: read from Viewport's texture as an Image (RGBA → BGRA).
     fn capture_video_cpu(&self, timestamp: f64) -> Option<VideoRawFrame> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+
         self.base()
             .get_viewport()
             .and_then(|vp| vp.get_texture())
             .and_then(|tex| tex.get_image())
-            .map(|image| {
+            .map(|mut image| {
+                if !LOGGED.swap(true, Ordering::Relaxed) {
+                    godot_print!(
+                        "[InstantReplay] first frame: format={:?} size={}x{} bytes={} expected={}",
+                        image.get_format(),
+                        image.get_width(),
+                        image.get_height(),
+                        image.get_data().len(),
+                        image.get_width() * image.get_height() * 4
+                    );
+                }
+                // Normalize to RGBA8 regardless of the viewport's native format.
+                // The mobile renderer on Vulkan/LLVMpipe may return FORMAT_L8 (1 byte/pixel),
+                // which would cause FFmpeg to accumulate 4 frames per encoded frame (4× tiling).
+                image.convert(godot::classes::image::Format::RGBA8);
                 let data = image.get_data();
                 let mut bgra = data.to_vec();
                 for chunk in bgra.chunks_mut(4) {
