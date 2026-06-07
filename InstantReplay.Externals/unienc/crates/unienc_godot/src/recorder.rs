@@ -288,14 +288,19 @@ impl InstantReplayRecorder {
         self.pending_export = Some(slot);
 
         std::thread::spawn(move || {
-            // stop() drains encoders; export_to_file() muxes — both are blocking.
-            session.pipeline.stop();
-            let result = session
-                .pipeline
-                .export_to_file(duration, &path)
-                .map(|_| path)
-                .map_err(|e| e.to_string());
-            *slot_writer.lock().unwrap() = Some(result);
+            // catch_unwind ensures write_pending_result is always called, even if
+            // stop() or export_to_file() panics. Without this, the slot stays None
+            // forever and export_replay refuses all subsequent exports.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                session.pipeline.stop();
+                session
+                    .pipeline
+                    .export_to_file(duration, &path)
+                    .map(|_| path)
+                    .map_err(|e| e.to_string())
+            }))
+            .unwrap_or_else(|_| Err("export thread panicked unexpectedly".to_string()));
+            write_pending_result(&slot_writer, result);
         });
     }
 
@@ -306,7 +311,7 @@ impl InstantReplayRecorder {
 
     fn poll_pending_export(&mut self) {
         let result = self.pending_export.as_ref().and_then(|slot| {
-            slot.lock().unwrap().take()
+            take_pending_result(slot)
         });
         if let Some(r) = result {
             self.pending_export = None;
@@ -318,6 +323,89 @@ impl InstantReplayRecorder {
                 Err(e) => self.emit_error(&format!("Export failed: {e}")),
             }
         }
+    }
+}
+
+// ── Export slot helpers ──────────────────────────────────────────────────────
+
+/// Drain the export result slot.
+///
+/// Recovers from a poisoned mutex (caused by a prior export thread panic) so
+/// the main thread does not take a secondary panic on the next `_process()` tick.
+fn take_pending_result(
+    slot: &Mutex<Option<Result<String, String>>>,
+) -> Option<Result<String, String>> {
+    slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Write the export result into the shared slot.
+///
+/// Recovers from a poisoned mutex so the background thread does not re-panic
+/// if an earlier panic already poisoned the lock.
+fn write_pending_result(
+    slot: &Mutex<Option<Result<String, String>>>,
+    result: Result<String, String>,
+) {
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{take_pending_result, write_pending_result};
+    use std::sync::{Arc, Mutex};
+
+    /// Create an `Arc<Mutex<…>>` whose mutex is already poisoned.
+    fn make_poisoned() -> Arc<Mutex<Option<Result<String, String>>>> {
+        let m = Arc::new(Mutex::new(None::<Result<String, String>>));
+        let m2 = Arc::clone(&m);
+        // Thread panics while holding the lock → mutex is marked poisoned on drop.
+        let _ = std::thread::spawn(move || {
+            let _guard = m2.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join(); // join() returns Err(JoinError); that is expected
+        m
+    }
+
+    #[test]
+    fn take_pending_result_survives_poisoned_mutex() {
+        let slot = make_poisoned();
+        assert!(slot.is_poisoned(), "precondition: mutex must be poisoned");
+        let result = take_pending_result(&slot);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn write_pending_result_survives_poisoned_mutex() {
+        let slot = make_poisoned();
+        assert!(slot.is_poisoned(), "precondition: mutex must be poisoned");
+        write_pending_result(&slot, Ok("out.mp4".to_string()));
+        let stored = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        assert_eq!(stored, Some(Ok("out.mp4".to_string())));
+    }
+
+    // Verify the catch_unwind pattern: if the export work panics, the slot
+    // still receives an Err result so poll_pending_export can clean up.
+    #[test]
+    fn export_thread_panic_writes_error_to_slot() {
+        let slot: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+        let slot2 = Arc::clone(&slot);
+
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                panic!("simulated pipeline failure");
+                #[allow(unreachable_code)]
+                Ok::<String, String>("out.mp4".to_string())
+            }))
+            .unwrap_or_else(|_| Err("export thread panicked unexpectedly".to_string()));
+            write_pending_result(&slot2, result);
+        })
+        .join()
+        .expect("thread must not panic after catch_unwind wraps the work");
+
+        let value = take_pending_result(&slot);
+        assert!(value.is_some(), "slot must contain a result even when work panics");
+        assert!(value.unwrap().is_err(), "result must be Err when work panics");
     }
 }
 
