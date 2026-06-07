@@ -5,7 +5,8 @@ use godot::prelude::*;
 use unienc_core::{session::SessionController, temporal::TemporalController};
 
 use crate::pipeline::{
-    AudioRawFrame, EncodingPipeline, GodotAudioOptions, GodotVideoOptions, VideoRawFrame,
+    AudioRawFrame, EncodingPipeline, GodotAudioOptions, GodotVideoOptions, PipelineOptions,
+    VideoRawFrame,
 };
 
 struct ActiveSession {
@@ -13,6 +14,8 @@ struct ActiveSession {
     temporal: TemporalController,
     pipeline: EncodingPipeline,
     audio_sample_position: u64,
+    /// Monotonically increasing video frame counter; used by fixed-frame-rate timestamping.
+    video_frame_counter: u64,
 }
 
 /// Godot node that manages an instant-replay recording session.
@@ -71,6 +74,22 @@ pub struct InstantReplayRecorder {
     #[export]
     use_gpu_readback: bool,
 
+    /// If > 0.0, frame timestamps are derived from a frame counter (frame_n / fps)
+    /// rather than wall-clock time. This eliminates jitter at the cost of real-time accuracy.
+    /// Set to 0.0 (default) to use wall-clock timestamps.
+    #[export]
+    fixed_frame_rate: f64,
+
+    /// Capacity of the bounded video input channel (number of frames).
+    /// Frames submitted via the frame_post_draw callback are dropped when the channel is full.
+    #[export]
+    video_input_queue_size: i64,
+
+    /// Max queued audio duration in seconds before audio is dropped.
+    /// Converted to a channel capacity at `start()` using the audio mix rate.
+    #[export]
+    audio_input_queue_size_seconds: f64,
+
     session: Option<Box<ActiveSession>>,
     audio_capture: Option<Gd<AudioEffectCapture>>,
     audio_capture_effect_idx: i32,
@@ -94,6 +113,9 @@ impl INode for InstantReplayRecorder {
             video_height: 0,
             fps_hint: 30,
             use_gpu_readback: false,
+            fixed_frame_rate: 0.0,
+            video_input_queue_size: 32,
+            audio_input_queue_size_seconds: 1.0,
             session: None,
             audio_capture: None,
             audio_capture_effect_idx: -1,
@@ -148,7 +170,10 @@ impl InstantReplayRecorder {
             .session
             .as_ref()
             .map_or(0.0, |s| s.temporal.total_paused_secs());
-        let timestamp = Time::singleton().get_ticks_usec() as f64 / 1_000_000.0 - total_paused;
+        let wall_clock = Time::singleton().get_ticks_usec() as f64 / 1_000_000.0 - total_paused;
+
+        let frame_counter = self.session.as_ref().map_or(0, |s| s.video_frame_counter);
+        let timestamp = compute_frame_timestamp(self.fixed_frame_rate, frame_counter, wall_clock);
 
         let frame = if self.use_gpu_readback {
             self.capture_video_gpu(timestamp)
@@ -156,8 +181,11 @@ impl InstantReplayRecorder {
             self.capture_video_cpu(timestamp)
         };
 
-        if let (Some(frame), Some(session)) = (frame, self.session.as_ref()) {
-            session.pipeline.try_send_video(frame);
+        if let Some(session) = self.session.as_mut() {
+            if let Some(frame) = frame {
+                session.pipeline.try_send_video(frame);
+            }
+            session.video_frame_counter += 1;
         }
     }
 
@@ -198,10 +226,17 @@ impl InstantReplayRecorder {
             bitrate: self.audio_bitrate as u32,
         };
 
+        let pipeline_opts = PipelineOptions::from_config(
+            self.video_input_queue_size.max(0) as usize,
+            self.audio_input_queue_size_seconds,
+            audio_sample_rate,
+        );
+
         let pipeline = match EncodingPipeline::new(
             video_opts,
             audio_opts,
             self.max_memory_usage as usize,
+            pipeline_opts,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -218,6 +253,7 @@ impl InstantReplayRecorder {
             temporal,
             pipeline,
             audio_sample_position: 0,
+            video_frame_counter: 0,
         }));
     }
 
@@ -349,10 +385,39 @@ fn write_pending_result(
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
 }
 
+/// When `fixed_fps > 0.0`, returns the timestamp derived purely from the frame counter so
+/// that output timing is deterministic regardless of wall-clock drift or pauses.
+/// When `fixed_fps <= 0.0`, falls through to the caller-supplied `wall_clock` value.
+#[must_use]
+pub fn compute_frame_timestamp(fixed_fps: f64, frame_counter: u64, wall_clock: f64) -> f64 {
+    if fixed_fps > 0.0 {
+        frame_counter as f64 / fixed_fps
+    } else {
+        wall_clock
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{take_pending_result, write_pending_result};
+    use super::{compute_frame_timestamp, take_pending_result, write_pending_result};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn fixed_fps_timestamps_use_frame_counter() {
+        assert_eq!(compute_frame_timestamp(30.0, 0, 99.0), 0.0);
+        let expected = 1.0 / 30.0;
+        let actual = compute_frame_timestamp(30.0, 1, 99.0);
+        assert!((actual - expected).abs() < 1e-12, "frame 1: expected {expected} got {actual}");
+        let expected = 60.0 / 30.0;
+        let actual = compute_frame_timestamp(30.0, 60, 99.0);
+        assert!((actual - expected).abs() < 1e-12, "frame 60: expected {expected} got {actual}");
+    }
+
+    #[test]
+    fn fixed_fps_disabled_falls_through_to_wall_clock() {
+        assert_eq!(compute_frame_timestamp(0.0, 5, 3.14), 3.14);
+        assert_eq!(compute_frame_timestamp(-1.0, 5, 7.0), 7.0);
+    }
 
     /// Create an `Arc<Mutex<…>>` whose mutex is already poisoned.
     fn make_poisoned() -> Arc<Mutex<Option<Result<String, String>>>> {

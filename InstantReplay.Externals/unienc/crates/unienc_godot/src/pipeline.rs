@@ -13,6 +13,79 @@ use unienc::{
 };
 use unienc_core::buffer::{BoundedEncodedFrameBuffer, EncodedFrame, SampleKind};
 
+// ── Pipeline construction options ───────────────────────────────────────────
+
+/// Converts an `audio_input_queue_size_seconds` value to a bounded-channel capacity.
+/// Uses 512 samples/chunk as a typical Godot audio buffer size.
+const GODOT_AUDIO_SAMPLES_PER_CHUNK: usize = 512;
+
+fn compute_audio_queue_capacity(sample_rate: u32, seconds: f64) -> usize {
+    let raw = (sample_rate as f64 * seconds / GODOT_AUDIO_SAMPLES_PER_CHUNK as f64) as usize;
+    raw.max(4)
+}
+
+/// Controls the sizes of the bounded input channels feeding the encoding pipeline.
+#[must_use]
+pub struct PipelineOptions {
+    /// Max queued video frames before `try_send_video` starts dropping.
+    pub video_input_queue_size: usize,
+    /// Max queued audio frames before `try_send_audio` starts dropping.
+    pub audio_input_queue_size: usize,
+}
+
+impl Default for PipelineOptions {
+    fn default() -> Self {
+        Self {
+            video_input_queue_size: 32,
+            audio_input_queue_size: compute_audio_queue_capacity(44_100, 1.0),
+        }
+    }
+}
+
+impl PipelineOptions {
+    /// Build options from user-facing configuration. `audio_sample_rate` is used to convert
+    /// `audio_input_queue_size_seconds` into a bounded-channel capacity.
+    pub fn from_config(
+        video_input_queue_size: usize,
+        audio_input_queue_size_seconds: f64,
+        audio_sample_rate: u32,
+    ) -> Self {
+        Self {
+            video_input_queue_size: video_input_queue_size.max(1),
+            audio_input_queue_size: compute_audio_queue_capacity(
+                audio_sample_rate,
+                audio_input_queue_size_seconds,
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_audio_queue_capacity, PipelineOptions, GODOT_AUDIO_SAMPLES_PER_CHUNK};
+
+    #[test]
+    fn pipeline_options_default_has_sensible_queue_sizes() {
+        let opts = PipelineOptions::default();
+        assert_eq!(opts.video_input_queue_size, 32);
+        assert!(opts.audio_input_queue_size >= 4, "audio queue too small: {}", opts.audio_input_queue_size);
+    }
+
+    #[test]
+    fn audio_queue_capacity_scales_with_seconds() {
+        let cap_1s = compute_audio_queue_capacity(44_100, 1.0);
+        let cap_2s = compute_audio_queue_capacity(44_100, 2.0);
+        assert_eq!(cap_2s, cap_1s * 2, "2s should give 2× the capacity of 1s");
+    }
+
+    #[test]
+    fn audio_queue_capacity_minimum_is_four() {
+        // Very short duration must not produce a pathologically small channel.
+        let cap = compute_audio_queue_capacity(44_100, 0.0);
+        assert!(cap >= 4, "minimum must be ≥4, got {cap}");
+    }
+}
+
 // ── Encoder options ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -117,6 +190,7 @@ impl EncodingPipeline {
         video_opts: GodotVideoOptions,
         audio_opts: GodotAudioOptions,
         max_memory_bytes: usize,
+        pipeline_opts: PipelineOptions,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -139,8 +213,10 @@ impl EncodingPipeline {
 
         let buffer = Arc::new(BoundedEncodedFrameBuffer::new(max_memory_bytes));
 
-        let (video_tx, video_rx) = mpsc::channel::<VideoRawFrame>(32);
-        let (audio_tx, audio_rx) = mpsc::channel::<AudioRawFrame>(64);
+        let (video_tx, video_rx) =
+            mpsc::channel::<VideoRawFrame>(pipeline_opts.video_input_queue_size);
+        let (audio_tx, audio_rx) =
+            mpsc::channel::<AudioRawFrame>(pipeline_opts.audio_input_queue_size);
 
         let vbuf = Arc::clone(&buffer);
         let abuf = Arc::clone(&buffer);
