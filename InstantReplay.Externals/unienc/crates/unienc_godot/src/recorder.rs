@@ -16,6 +16,10 @@ struct ActiveSession {
     audio_sample_position: u64,
     /// Monotonically increasing video frame counter; used by fixed-frame-rate timestamping.
     video_frame_counter: u64,
+    /// Wall-clock time at session start (total_paused=0); used to compute elapsed_wall for audio.
+    session_start_wall_clock: f64,
+    /// Audio mix rate captured at start(); used for lag-adjustment sample↔second conversion.
+    audio_sample_rate: u32,
 }
 
 /// Godot node that manages an instant-replay recording session.
@@ -90,6 +94,16 @@ pub struct InstantReplayRecorder {
     #[export]
     audio_input_queue_size_seconds: f64,
 
+    /// If > 0.0, a video frame whose timestamp deviates from wall-clock time by more than
+    /// this many seconds is snapped to wall-clock time. Set to 0.0 (default) to disable.
+    #[export]
+    video_lag_adjustment_threshold: f64,
+
+    /// If > 0.0, audio whose sample-position time deviates from wall-clock elapsed time by
+    /// more than this many seconds is realigned to wall clock. Set to 0.0 (default) to disable.
+    #[export]
+    audio_lag_adjustment_threshold: f64,
+
     session: Option<Box<ActiveSession>>,
     audio_capture: Option<Gd<AudioEffectCapture>>,
     audio_capture_effect_idx: i32,
@@ -116,6 +130,8 @@ impl INode for InstantReplayRecorder {
             fixed_frame_rate: 0.0,
             video_input_queue_size: 32,
             audio_input_queue_size_seconds: 1.0,
+            video_lag_adjustment_threshold: 0.0,
+            audio_lag_adjustment_threshold: 0.0,
             session: None,
             audio_capture: None,
             audio_capture_effect_idx: -1,
@@ -174,6 +190,8 @@ impl InstantReplayRecorder {
 
         let frame_counter = self.session.as_ref().map_or(0, |s| s.video_frame_counter);
         let timestamp = compute_frame_timestamp(self.fixed_frame_rate, frame_counter, wall_clock);
+        let timestamp =
+            apply_video_lag_adjustment(timestamp, wall_clock, self.video_lag_adjustment_threshold);
 
         let frame = if self.use_gpu_readback {
             self.capture_video_gpu(timestamp)
@@ -247,6 +265,9 @@ impl InstantReplayRecorder {
 
         let temporal = TemporalController::new();
         temporal.resume();
+        // total_paused is 0 at this exact moment, so raw ticks == adjusted wall clock.
+        let session_start_wall_clock =
+            Time::singleton().get_ticks_usec() as f64 / 1_000_000.0;
 
         self.session = Some(Box::new(ActiveSession {
             controller: SessionController::new(),
@@ -254,6 +275,8 @@ impl InstantReplayRecorder {
             pipeline,
             audio_sample_position: 0,
             video_frame_counter: 0,
+            session_start_wall_clock,
+            audio_sample_rate,
         }));
     }
 
@@ -385,6 +408,39 @@ fn write_pending_result(
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
 }
 
+/// When `threshold > 0.0` and `|wall_clock - timestamp| > threshold`, returns `wall_clock`
+/// to correct a timestamp that has drifted away from real time.
+/// Otherwise returns `timestamp` unchanged.
+#[must_use]
+pub fn apply_video_lag_adjustment(timestamp: f64, wall_clock: f64, threshold: f64) -> f64 {
+    if threshold > 0.0 && (wall_clock - timestamp).abs() > threshold {
+        wall_clock
+    } else {
+        timestamp
+    }
+}
+
+/// When `threshold > 0.0` and the audio sample position has drifted from `elapsed_wall` by
+/// more than `threshold` seconds, returns a corrected sample position aligned to wall time.
+/// Otherwise returns `sample_position` unchanged.
+#[must_use]
+pub fn apply_audio_lag_adjustment(
+    sample_position: u64,
+    elapsed_wall: f64,
+    sample_rate: u32,
+    threshold: f64,
+) -> u64 {
+    if threshold <= 0.0 {
+        return sample_position;
+    }
+    let elapsed_audio = sample_position as f64 / sample_rate as f64;
+    if (elapsed_wall - elapsed_audio).abs() > threshold {
+        (elapsed_wall * sample_rate as f64) as u64
+    } else {
+        sample_position
+    }
+}
+
 /// When `fixed_fps > 0.0`, returns the timestamp derived purely from the frame counter so
 /// that output timing is deterministic regardless of wall-clock drift or pauses.
 /// When `fixed_fps <= 0.0`, falls through to the caller-supplied `wall_clock` value.
@@ -399,8 +455,60 @@ pub fn compute_frame_timestamp(fixed_fps: f64, frame_counter: u64, wall_clock: f
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_frame_timestamp, take_pending_result, write_pending_result};
+    use super::{
+        apply_audio_lag_adjustment, apply_video_lag_adjustment, compute_frame_timestamp,
+        take_pending_result, write_pending_result,
+    };
     use std::sync::{Arc, Mutex};
+
+    // ── video lag adjustment ─────────────────────────────────────────────────
+
+    #[test]
+    fn video_lag_adjustment_snaps_to_wall_clock_when_deviation_exceeds_threshold() {
+        // timestamp is 1.2s behind wall clock; threshold is 1.0s → snap
+        assert_eq!(apply_video_lag_adjustment(3.0, 4.2, 1.0), 4.2);
+    }
+
+    #[test]
+    fn video_lag_adjustment_leaves_timestamp_when_within_threshold() {
+        // deviation is 0.3s, threshold is 0.5s → keep original timestamp
+        assert_eq!(apply_video_lag_adjustment(4.0, 4.3, 0.5), 4.0);
+    }
+
+    #[test]
+    fn video_lag_adjustment_disabled_when_threshold_is_zero_or_negative() {
+        assert_eq!(apply_video_lag_adjustment(1.0, 99.0, 0.0), 1.0);
+        assert_eq!(apply_video_lag_adjustment(1.0, 99.0, -1.0), 1.0);
+    }
+
+    #[test]
+    fn video_lag_adjustment_handles_timestamp_ahead_of_wall_clock() {
+        // timestamp is ahead of wall clock by 1.2s; threshold is 1.0s → snap
+        assert_eq!(apply_video_lag_adjustment(5.2, 4.0, 1.0), 4.0);
+    }
+
+    // ── audio lag adjustment ─────────────────────────────────────────────────
+
+    #[test]
+    fn audio_lag_adjustment_snaps_sample_position_when_lagging() {
+        // audio is at sample 44100 (1s elapsed), wall says 2.2s elapsed → 1.2s lag > 1.0s threshold
+        let adjusted = apply_audio_lag_adjustment(44_100, 2.2, 44_100, 1.0);
+        assert_eq!(adjusted, (2.2f64 * 44_100.0) as u64);
+    }
+
+    #[test]
+    fn audio_lag_adjustment_leaves_position_when_within_threshold() {
+        // audio at 1s, wall at 1.3s → 0.3s deviation < 0.5s threshold → no change
+        assert_eq!(apply_audio_lag_adjustment(44_100, 1.3, 44_100, 0.5), 44_100);
+    }
+
+    #[test]
+    fn audio_lag_adjustment_disabled_when_threshold_is_zero_or_negative() {
+        assert_eq!(apply_audio_lag_adjustment(0, 99.0, 44_100, 0.0), 0);
+        assert_eq!(apply_audio_lag_adjustment(0, 99.0, 44_100, -1.0), 0);
+    }
+
+    // ── compute_frame_timestamp ──────────────────────────────────────────────
 
     #[test]
     fn fixed_fps_timestamps_use_frame_counter() {
@@ -643,6 +751,18 @@ impl InstantReplayRecorder {
         });
 
         if let (Some(samples), Some(session)) = (audio_raw, self.session.as_mut()) {
+            let total_paused = session.temporal.total_paused_secs();
+            let wall_clock =
+                Time::singleton().get_ticks_usec() as f64 / 1_000_000.0 - total_paused;
+            let elapsed_wall = wall_clock - session.session_start_wall_clock;
+
+            session.audio_sample_position = apply_audio_lag_adjustment(
+                session.audio_sample_position,
+                elapsed_wall,
+                session.audio_sample_rate,
+                self.audio_lag_adjustment_threshold,
+            );
+
             let ts = session.audio_sample_position;
             session.audio_sample_position += samples.len() as u64 / 2;
             session.pipeline.try_send_audio(AudioRawFrame {
