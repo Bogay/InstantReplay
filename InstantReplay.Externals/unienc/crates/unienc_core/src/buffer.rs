@@ -84,7 +84,9 @@ impl BoundedEncodedFrameBuffer {
             g.video_metadata.push(frame);
         } else {
             // Ignore out-of-order frames with timestamp=0 (MediaCodec quirk)
-            if g.video_latest_timestamp.map_or(true, |t| frame.timestamp >= t) {
+            if g.video_latest_timestamp
+                .map_or(true, |t| frame.timestamp >= t)
+            {
                 g.video_latest_timestamp = Some(frame.timestamp);
             }
             g.video_queue.push_back(frame);
@@ -126,8 +128,16 @@ impl BoundedEncodedFrameBuffer {
         let audio_meta: Vec<EncodedFrame> = g.audio_metadata.drain(..).collect();
 
         // recalculate memory after drain
-        let drained_bytes: usize = raw_video.iter().chain(raw_audio.iter()).map(|f| f.data.len()).sum::<usize>()
-            + video_meta.iter().chain(audio_meta.iter()).map(|f| f.data.len()).sum::<usize>();
+        let drained_bytes: usize = raw_video
+            .iter()
+            .chain(raw_audio.iter())
+            .map(|f| f.data.len())
+            .sum::<usize>()
+            + video_meta
+                .iter()
+                .chain(audio_meta.iter())
+                .map(|f| f.data.len())
+                .sum::<usize>();
         g.current_memory_bytes = g.current_memory_bytes.saturating_sub(drained_bytes);
         g.video_latest_timestamp = None;
         drop(g);
@@ -153,9 +163,7 @@ impl BoundedEncodedFrameBuffer {
                     })
                     .map(|(i, _)| i)
             }
-            None => raw_video
-                .iter()
-                .position(|f| f.kind == SampleKind::Key),
+            None => raw_video.iter().position(|f| f.kind == SampleKind::Key),
         };
 
         let Some(video_start_idx) = video_start_idx else {
@@ -209,8 +217,8 @@ impl BoundedEncodedFrameBuffer {
         if g.current_memory_bytes + required <= self.max_memory_bytes {
             return;
         }
-        let need_to_free = (g.current_memory_bytes + required)
-            .saturating_sub(self.max_memory_bytes);
+        let need_to_free =
+            (g.current_memory_bytes + required).saturating_sub(self.max_memory_bytes);
         let mut freed = 0usize;
 
         while freed < need_to_free {
@@ -231,14 +239,12 @@ impl BoundedEncodedFrameBuffer {
                 (Some(_), None) => {
                     let f = g.video_queue.pop_front().unwrap();
                     freed += f.data.len();
-                    g.current_memory_bytes =
-                        g.current_memory_bytes.saturating_sub(f.data.len());
+                    g.current_memory_bytes = g.current_memory_bytes.saturating_sub(f.data.len());
                 }
                 (None, Some(_)) => {
                     let f = g.audio_queue.pop_front().unwrap();
                     freed += f.data.len();
-                    g.current_memory_bytes =
-                        g.current_memory_bytes.saturating_sub(f.data.len());
+                    g.current_memory_bytes = g.current_memory_bytes.saturating_sub(f.data.len());
                 }
                 (None, None) => break,
             }
@@ -271,7 +277,11 @@ mod tests {
 
         // adding 40 more (total would be 120) must evict the oldest
         buf.try_add_video_frame(video(2.0, 40, SampleKind::Interpolated));
-        assert!(buf.memory_usage() <= 100, "memory_usage={}", buf.memory_usage());
+        assert!(
+            buf.memory_usage() <= 100,
+            "memory_usage={}",
+            buf.memory_usage()
+        );
     }
 
     #[test]
@@ -283,7 +293,11 @@ mod tests {
         // total=60; adding 30 more must evict the oldest (video at t=0)
         buf.try_add_video_frame(video(1.0, 30, SampleKind::Interpolated));
 
-        assert!(buf.memory_usage() <= 80, "memory_usage={}", buf.memory_usage());
+        assert!(
+            buf.memory_usage() <= 80,
+            "memory_usage={}",
+            buf.memory_usage()
+        );
     }
 
     // ── get_frames_for_duration ──────────────────────────────────────────────

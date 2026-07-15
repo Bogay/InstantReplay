@@ -1,6 +1,6 @@
-use std::pin::Pin;
 use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use bincode::config::standard;
@@ -8,8 +8,7 @@ use tokio::sync::mpsc;
 use unienc::{
     AudioSample, CompletionHandle, EncodedData, Encoder, EncoderInput, EncoderOutput,
     EncodingSystem, Muxer, MuxerInput, Runtime as RuntimeTrait, Spawn, SpawnBlocking,
-    UniencSampleKind, VideoFrame, VideoFrameBgra32, VideoSample,
-    buffer::SharedBuffer,
+    UniencSampleKind, VideoFrame, VideoFrameBgra32, VideoSample, buffer::SharedBuffer,
 };
 use unienc_core::buffer::{BoundedEncodedFrameBuffer, EncodedFrame, SampleKind};
 
@@ -62,13 +61,17 @@ impl PipelineOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_audio_queue_capacity, PipelineOptions, GODOT_AUDIO_SAMPLES_PER_CHUNK};
+    use super::{GODOT_AUDIO_SAMPLES_PER_CHUNK, PipelineOptions, compute_audio_queue_capacity};
 
     #[test]
     fn pipeline_options_default_has_sensible_queue_sizes() {
         let opts = PipelineOptions::default();
         assert_eq!(opts.video_input_queue_size, 32);
-        assert!(opts.audio_input_queue_size >= 4, "audio queue too small: {}", opts.audio_input_queue_size);
+        assert!(
+            opts.audio_input_queue_size >= 4,
+            "audio queue too small: {}",
+            opts.audio_input_queue_size
+        );
     }
 
     #[test]
@@ -97,10 +100,18 @@ pub struct GodotVideoOptions {
 }
 
 impl unienc::VideoEncoderOptions for GodotVideoOptions {
-    fn width(&self) -> u32 { self.width }
-    fn height(&self) -> u32 { self.height }
-    fn fps_hint(&self) -> u32 { self.fps_hint }
-    fn bitrate(&self) -> u32 { self.bitrate }
+    fn width(&self) -> u32 {
+        self.width
+    }
+    fn height(&self) -> u32 {
+        self.height
+    }
+    fn fps_hint(&self) -> u32 {
+        self.fps_hint
+    }
+    fn bitrate(&self) -> u32 {
+        self.bitrate
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -111,9 +122,15 @@ pub struct GodotAudioOptions {
 }
 
 impl unienc::AudioEncoderOptions for GodotAudioOptions {
-    fn sample_rate(&self) -> u32 { self.sample_rate }
-    fn channels(&self) -> u32 { self.channels }
-    fn bitrate(&self) -> u32 { self.bitrate }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn channels(&self) -> u32 {
+        self.channels
+    }
+    fn bitrate(&self) -> u32 {
+        self.bitrate
+    }
 }
 
 // ── Tokio-backed unienc::Runtime ────────────────────────────────────────────
@@ -143,13 +160,14 @@ impl RuntimeTrait for TokioRuntime {}
 
 // ── Platform type aliases ────────────────────────────────────────────────────
 
-type GodotSystem = unienc::PlatformEncodingSystem<GodotVideoOptions, GodotAudioOptions, TokioRuntime>;
+type GodotSystem =
+    unienc::PlatformEncodingSystem<GodotVideoOptions, GodotAudioOptions, TokioRuntime>;
 type GodotVideoEnc = <GodotSystem as EncodingSystem>::VideoEncoderType;
-type GodotVideoIn  = <GodotVideoEnc as Encoder>::InputType;
+type GodotVideoIn = <GodotVideoEnc as Encoder>::InputType;
 type GodotVideoOut = <GodotVideoEnc as Encoder>::OutputType;
 type GodotVideoData = <GodotVideoOut as EncoderOutput>::Data;
 type GodotAudioEnc = <GodotSystem as EncodingSystem>::AudioEncoderType;
-type GodotAudioIn  = <GodotAudioEnc as Encoder>::InputType;
+type GodotAudioIn = <GodotAudioEnc as Encoder>::InputType;
 type GodotAudioOut = <GodotAudioEnc as Encoder>::OutputType;
 type GodotAudioData = <GodotAudioOut as EncoderOutput>::Data;
 type GodotMux = <GodotSystem as EncodingSystem>::MuxerType;
@@ -197,7 +215,9 @@ impl EncodingPipeline {
             .enable_all()
             .build()?;
 
-        let runtime = TokioRuntime { handle: tokio_rt.handle().clone() };
+        let runtime = TokioRuntime {
+            handle: tokio_rt.handle().clone(),
+        };
         let encoding_system = GodotSystem::new(&video_opts, &audio_opts, runtime);
 
         // new_video_encoder() prints "Running FFmpeg" and spawns the ffmpeg
@@ -262,10 +282,18 @@ impl EncodingPipeline {
         let aplh = self.audio_pull_handle.take();
 
         self.tokio_rt.block_on(async move {
-            if let Some(h) = vph  { let _ = h.await; }
-            if let Some(h) = vplh { let _ = h.await; }
-            if let Some(h) = aph  { let _ = h.await; }
-            if let Some(h) = aplh { let _ = h.await; }
+            if let Some(h) = vph {
+                let _ = h.await;
+            }
+            if let Some(h) = vplh {
+                let _ = h.await;
+            }
+            if let Some(h) = aph {
+                let _ = h.await;
+            }
+            if let Some(h) = aplh {
+                let _ = h.await;
+            }
         });
     }
 

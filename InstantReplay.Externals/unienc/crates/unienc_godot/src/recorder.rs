@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use godot::classes::{AudioEffectCapture, AudioServer, INode, ProjectSettings, RenderingServer, Time};
+use godot::classes::{
+    AudioEffectCapture, AudioServer, INode, ProjectSettings, RenderingServer, Time,
+};
 use godot::prelude::*;
 use unienc_core::{session::SessionController, temporal::TemporalController};
 
@@ -177,7 +179,10 @@ impl InstantReplayRecorder {
     /// Captures the viewport texture and feeds it into the encoding pipeline.
     #[func]
     fn on_frame_post_draw(&mut self) {
-        let is_paused = self.session.as_ref().map_or(true, |s| s.temporal.is_paused());
+        let is_paused = self
+            .session
+            .as_ref()
+            .map_or(true, |s| s.temporal.is_paused());
         if is_paused {
             return;
         }
@@ -266,8 +271,7 @@ impl InstantReplayRecorder {
         let temporal = TemporalController::new();
         temporal.resume();
         // total_paused is 0 at this exact moment, so raw ticks == adjusted wall clock.
-        let session_start_wall_clock =
-            Time::singleton().get_ticks_usec() as f64 / 1_000_000.0;
+        let session_start_wall_clock = Time::singleton().get_ticks_usec() as f64 / 1_000_000.0;
 
         self.session = Some(Box::new(ActiveSession {
             controller: SessionController::new(),
@@ -309,7 +313,9 @@ impl InstantReplayRecorder {
         if self.pending_export.is_some() {
             // Silently ignore — a race condition (e.g. two mob hits, or dying during
             // a save) must not interrupt the export already in progress.
-            godot_print!("[InstantReplay] export_replay() called while export in progress — ignored");
+            godot_print!(
+                "[InstantReplay] export_replay() called while export in progress — ignored"
+            );
             return;
         }
 
@@ -369,9 +375,10 @@ impl InstantReplayRecorder {
     }
 
     fn poll_pending_export(&mut self) {
-        let result = self.pending_export.as_ref().and_then(|slot| {
-            take_pending_result(slot)
-        });
+        let result = self
+            .pending_export
+            .as_ref()
+            .and_then(|slot| take_pending_result(slot));
         if let Some(r) = result {
             self.pending_export = None;
             match r {
@@ -515,10 +522,16 @@ mod tests {
         assert_eq!(compute_frame_timestamp(30.0, 0, 99.0), 0.0);
         let expected = 1.0 / 30.0;
         let actual = compute_frame_timestamp(30.0, 1, 99.0);
-        assert!((actual - expected).abs() < 1e-12, "frame 1: expected {expected} got {actual}");
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "frame 1: expected {expected} got {actual}"
+        );
         let expected = 60.0 / 30.0;
         let actual = compute_frame_timestamp(30.0, 60, 99.0);
-        assert!((actual - expected).abs() < 1e-12, "frame 60: expected {expected} got {actual}");
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "frame 60: expected {expected} got {actual}"
+        );
     }
 
     #[test]
@@ -577,8 +590,14 @@ mod tests {
         .expect("thread must not panic after catch_unwind wraps the work");
 
         let value = take_pending_result(&slot);
-        assert!(value.is_some(), "slot must contain a result even when work panics");
-        assert!(value.unwrap().is_err(), "result must be Err when work panics");
+        assert!(
+            value.is_some(),
+            "slot must contain a result even when work panics"
+        );
+        assert!(
+            value.unwrap().is_err(),
+            "result must be Err when work panics"
+        );
     }
 }
 
@@ -698,7 +717,12 @@ impl InstantReplayRecorder {
             })
             .unwrap_or((1920, 1080));
 
-        Some(VideoRawFrame { bgra32: bgra, width: w, height: h, timestamp })
+        Some(VideoRawFrame {
+            bgra32: bgra,
+            width: w,
+            height: h,
+            timestamp,
+        })
     }
 }
 
@@ -724,7 +748,10 @@ impl InstantReplayRecorder {
     }
 
     fn capture_audio(&mut self) {
-        let is_paused = self.session.as_ref().map_or(true, |s| s.temporal.is_paused());
+        let is_paused = self
+            .session
+            .as_ref()
+            .map_or(true, |s| s.temporal.is_paused());
         if is_paused {
             return;
         }
@@ -752,8 +779,7 @@ impl InstantReplayRecorder {
 
         if let (Some(samples), Some(session)) = (audio_raw, self.session.as_mut()) {
             let total_paused = session.temporal.total_paused_secs();
-            let wall_clock =
-                Time::singleton().get_ticks_usec() as f64 / 1_000_000.0 - total_paused;
+            let wall_clock = Time::singleton().get_ticks_usec() as f64 / 1_000_000.0 - total_paused;
             let elapsed_wall = wall_clock - session.session_start_wall_clock;
 
             session.audio_sample_position = apply_audio_lag_adjustment(

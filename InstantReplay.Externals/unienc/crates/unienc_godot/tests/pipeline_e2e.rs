@@ -9,11 +9,20 @@ const FPS: u32 = 10;
 const FRAMES: usize = 20; // 2 seconds
 
 fn video_opts() -> GodotVideoOptions {
-    GodotVideoOptions { width: W, height: H, fps_hint: FPS, bitrate: 1_000_000 }
+    GodotVideoOptions {
+        width: W,
+        height: H,
+        fps_hint: FPS,
+        bitrate: 1_000_000,
+    }
 }
 
 fn audio_opts() -> GodotAudioOptions {
-    GodotAudioOptions { sample_rate: 44_100, channels: 2, bitrate: 64_000 }
+    GodotAudioOptions {
+        sample_rate: 44_100,
+        channels: 2,
+        bitrate: 64_000,
+    }
 }
 
 fn send_frames(pipeline: &EncodingPipeline) {
@@ -31,7 +40,12 @@ fn send_frames(pipeline: &EncodingPipeline) {
             chunk[2] = 0xff - b;
             chunk[3] = 0xff;
         }
-        pipeline.try_send_video(VideoRawFrame { bgra32: bgra, width: W, height: H, timestamp: ts });
+        pipeline.try_send_video(VideoRawFrame {
+            bgra32: bgra,
+            width: W,
+            height: H,
+            timestamp: ts,
+        });
 
         let ts_samples = i as u64 * samples_per_frame;
         pipeline.try_send_audio(AudioRawFrame {
@@ -43,7 +57,10 @@ fn send_frames(pipeline: &EncodingPipeline) {
 
 #[test]
 fn pipeline_with_custom_queue_sizes_encodes_without_error() {
-    let opts = PipelineOptions { video_input_queue_size: 4, audio_input_queue_size: 8 };
+    let opts = PipelineOptions {
+        video_input_queue_size: 4,
+        audio_input_queue_size: 8,
+    };
     let mut pipeline =
         EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024, opts).expect("init");
     send_frames(&pipeline);
@@ -58,8 +75,13 @@ fn pipeline_with_custom_queue_sizes_encodes_without_error() {
 
 #[test]
 fn pipeline_encodes_and_exports_full_duration() {
-    let mut pipeline =
-        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024, PipelineOptions::default()).expect("init");
+    let mut pipeline = EncodingPipeline::new(
+        video_opts(),
+        audio_opts(),
+        32 * 1024 * 1024,
+        PipelineOptions::default(),
+    )
+    .expect("init");
     send_frames(&pipeline);
     pipeline.stop();
 
@@ -77,21 +99,42 @@ fn pipeline_trims_to_requested_duration() {
     let out_full = "/tmp/unienc_e2e_trim_full.mp4";
     let out_trimmed = "/tmp/unienc_e2e_trim_1s.mp4";
 
-    let mut full_pipeline =
-        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024, PipelineOptions::default()).expect("init full");
+    let mut full_pipeline = EncodingPipeline::new(
+        video_opts(),
+        audio_opts(),
+        32 * 1024 * 1024,
+        PipelineOptions::default(),
+    )
+    .expect("init full");
     send_frames(&full_pipeline);
     full_pipeline.stop();
-    full_pipeline.export_to_file(None, out_full).expect("full export");
+    full_pipeline
+        .export_to_file(None, out_full)
+        .expect("full export");
 
-    let mut trimmed_pipeline =
-        EncodingPipeline::new(video_opts(), audio_opts(), 32 * 1024 * 1024, PipelineOptions::default()).expect("init trimmed");
+    let mut trimmed_pipeline = EncodingPipeline::new(
+        video_opts(),
+        audio_opts(),
+        32 * 1024 * 1024,
+        PipelineOptions::default(),
+    )
+    .expect("init trimmed");
     send_frames(&trimmed_pipeline);
     trimmed_pipeline.stop();
-    trimmed_pipeline.export_to_file(Some(1.0), out_trimmed).expect("trimmed export");
+    trimmed_pipeline
+        .export_to_file(Some(1.0), out_trimmed)
+        .expect("trimmed export");
 
-    let full_size = std::fs::metadata(out_full).expect("full file missing").len();
-    let trimmed_size = std::fs::metadata(out_trimmed).expect("trimmed file missing").len();
-    assert!(trimmed_size < full_size, "trimmed file should be smaller than full");
+    let full_size = std::fs::metadata(out_full)
+        .expect("full file missing")
+        .len();
+    let trimmed_size = std::fs::metadata(out_trimmed)
+        .expect("trimmed file missing")
+        .len();
+    assert!(
+        trimmed_size < full_size,
+        "trimmed file should be smaller than full"
+    );
 
     std::fs::remove_file(out_full).ok();
     std::fs::remove_file(out_trimmed).ok();
@@ -101,13 +144,20 @@ fn pipeline_trims_to_requested_duration() {
 fn pipeline_respects_memory_ceiling() {
     // Tiny ceiling — frames must be evicted
     let ceiling = 50_000;
-    let mut pipeline =
-        EncodingPipeline::new(video_opts(), audio_opts(), ceiling, PipelineOptions::default()).expect("init");
+    let mut pipeline = EncodingPipeline::new(
+        video_opts(),
+        audio_opts(),
+        ceiling,
+        PipelineOptions::default(),
+    )
+    .expect("init");
     send_frames(&pipeline);
     pipeline.stop();
 
     // Should still export without error even though most frames were dropped
     let out = "/tmp/unienc_e2e_ceiling.mp4";
-    pipeline.export_to_file(None, out).expect("export with ceiling");
+    pipeline
+        .export_to_file(None, out)
+        .expect("export with ceiling");
     std::fs::remove_file(out).ok();
 }
