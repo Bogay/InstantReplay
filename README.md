@@ -6,6 +6,9 @@
 
 [日本語](README.ja.md)
 
+> [!NOTE]
+> This is an unofficial fork of the original [Instant Replay](https://github.com/CyberAgentGameEntertainment/InstantReplay) by CyberAgent, Inc., adding experimental support for Godot. It is not affiliated with or endorsed by CyberAgent, and the Godot integration is not yet feature-complete. The rest of this document still describes the original Unity library; see [`integration-demo`](integration-demo) for the in-progress Godot port.
+
 Instant Replay is a Unity library for saving recent gameplay footage on demand.
 It maintains a rolling buffer, so you can save important moments even after they happen. Recording is limited to a preconfigured duration, and frames older than that limit are discarded.
 
