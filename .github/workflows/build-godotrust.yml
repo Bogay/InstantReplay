@@ -1,0 +1,33 @@
+name: Build godotrust
+
+on:
+  push:
+    paths:
+      - 'integration-demo/dodge-the-creeps-godotrust/rust/Cargo.toml'
+      - 'integration-demo/dodge-the-creeps-godotrust/rust/Cargo.lock'
+      - 'integration-demo/dodge-the-creeps-godotrust/rust/about.toml'
+      - 'integration-demo/dodge-the-creeps-godotrust/rust/about.hbs'
+  workflow_dispatch:
+
+jobs:
+  update-tpn:
+    name: Update third-party notices
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      - run: |
+          cargo install cargo-about --locked --features cli
+          cargo about generate about.hbs > THIRD-PARTY-NOTICES.md
+        working-directory: integration-demo/dodge-the-creeps-godotrust/rust
+      - run: |
+          git add ./integration-demo/dodge-the-creeps-godotrust/rust/THIRD-PARTY-NOTICES.md
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git diff --cached --quiet || git commit -m "Update godotrust third-party notices"
+          git diff --cached --quiet || git push origin ${{ github.ref_name }}
+
+permissions:
+  contents: write
